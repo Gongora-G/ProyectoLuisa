@@ -2,11 +2,10 @@ const express = require('express');
 const mysql = require('mysql2');
 const bcrypt = require('bcryptjs');
 const session = require('express-session');
+const MySQLStore = require('express-mysql-session')(session);
 const bodyParser = require('body-parser');
 const path = require('path');
 require('dotenv').config();
-
-require('dotenv').config(); // Cargar variables de entorno
 
 const app = express();
 
@@ -19,36 +18,37 @@ app.use(express.static('public'));
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 
-// Configuración de la sesión
-app.use(session({
-    secret: process.env.SESSION_SECRET || 'mySecret', // Usa variable de entorno para la clave secreta
-    resave: false,
-    saveUninitialized: false
-}));
-
-// Middleware para pasar la información del usuario a las vistas
-app.use((req, res, next) => {
-    res.locals.user = req.session.username || null;
-    next();
-});
-
 // Conexión a la base de datos
 const db = mysql.createConnection({
     host: process.env.MYSQLHOST,
     user: process.env.MYSQLUSER,
     password: process.env.MYSQLPASSWORD,
     database: process.env.MYSQLDATABASE,
-    port: process.env.MYSQLPORT || 3306
+    port: process.env.MYSQLPORT || 3306,
 });
-
-
 
 db.connect((err) => {
     if (err) {
         console.error('Error al conectar a la base de datos:', err.message);
-        process.exit(1);
+        process.exit(1); // Detiene el servidor si no puede conectar
     }
     console.log('Conectado a la base de datos');
+});
+
+// Configuración de la sesión con almacenamiento en MySQL
+const sessionStore = new MySQLStore({}, db);
+
+app.use(session({
+    secret: process.env.SESSION_SECRET || 'mySecret', // Usa una variable de entorno para mayor seguridad
+    resave: false,
+    saveUninitialized: false,
+    store: sessionStore,
+}));
+
+// Middleware para pasar información de sesión a las vistas
+app.use((req, res, next) => {
+    res.locals.user = req.session.username || null;
+    next();
 });
 
 // Página principal (index)
@@ -76,14 +76,14 @@ app.get('/products', (req, res) => {
     });
 });
 
-// Ver carrito de compras
+// Carrito de compras
 app.get('/cart', (req, res) => {
     const cart = req.session.cart || [];
     const total = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
     res.render('cart', { cart, total, checkoutMessage: null });
 });
 
-// Agregar productos al carrito de compras
+// Agregar productos al carrito
 app.post('/add-to-cart/:id', (req, res) => {
     const productId = parseInt(req.params.id);
     const quantity = parseInt(req.body.quantity, 10);
@@ -107,14 +107,14 @@ app.post('/add-to-cart/:id', (req, res) => {
     });
 });
 
-// Eliminar productos del carrito de compras
+// Eliminar productos del carrito
 app.post('/remove-from-cart/:id', (req, res) => {
     const productId = parseInt(req.params.id);
     req.session.cart = (req.session.cart || []).filter(item => item.id !== productId);
     res.redirect('/cart');
 });
 
-// Actualizar cantidad de un producto en el carrito de compras
+// Actualizar cantidad en el carrito
 app.post('/update-cart/:id', (req, res) => {
     const productId = parseInt(req.params.id);
     const newQuantity = parseInt(req.body.quantity, 10);
@@ -133,14 +133,14 @@ app.post('/checkout', (req, res) => {
         return res.render('cart', {
             cart: req.session.cart || [],
             total: req.session.cart.reduce((sum, item) => sum + (item.price * item.quantity), 0),
-            checkoutMessage: { type: 'error', text: 'Debes iniciar sesión para proceder al pago.' }
+            checkoutMessage: { type: 'error', text: 'Debes iniciar sesión para proceder al pago.' },
         });
     }
 
     res.render('cart', {
         cart: req.session.cart || [],
         total: req.session.cart.reduce((sum, item) => sum + (item.price * item.quantity), 0),
-        checkoutMessage: { type: 'success', text: 'Pago realizado con éxito.' }
+        checkoutMessage: { type: 'success', text: 'Pago realizado con éxito.' },
     });
 });
 
@@ -171,7 +171,11 @@ app.post('/login', async (req, res) => {
     const { email, password } = req.body;
 
     db.query('SELECT * FROM users WHERE email = ?', [email], async (err, results) => {
-        if (err || results.length === 0) {
+        if (err) {
+            console.error('Error en la consulta:', err.message);
+            return res.status(500).send('Error en el servidor');
+        }
+        if (results.length === 0) {
             return res.render('login', { error: 'Usuario no encontrado' });
         }
         const user = results[0];
@@ -213,7 +217,7 @@ app.get('/post', (req, res) => {
 });
 
 // Iniciar servidor
-const port = process.env.PORT || 3000; // Usar el puerto proporcionado por Railway
+const port = process.env.PORT || 3000; // Usa el puerto configurado en Railway
 app.listen(port, () => {
     console.log(`Servidor corriendo en el puerto ${port}`);
 });
